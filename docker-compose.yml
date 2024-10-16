@@ -1,0 +1,115 @@
+version: '3'
+
+services:
+
+  # PowerDNS Recursor (Main DNS Entry Point)
+  pdns-recursor-mysql:
+    image: pschiffe/pdns-recursor:latest
+    networks:
+      pdns-mysql:
+        ipv4_address: 172.6.0.22
+    ports:
+      - '53:53/udp'
+      - '53:53/tcp'
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    ulimits:
+      nofile:
+        soft: 5000
+        hard: 5000
+    environment:
+      - PDNS_allow-from=0.0.0.0/0  # Allows all clients to query
+      - PDNS_api_key=${PDNS_API_KEY}
+      - PDNS_webserver=yes 
+      - PDNS_webserver_address=0.0.0.0
+      - PDNS_webserver_password=${PDNS_WEBSERVER_PASSWORD}
+      - PDNS_forward-zones=${PDNS_FORWARD_ZONES}  # Forward reverse DNS queries to authoritative server
+      - PDNS_forward-zones-recurse=${PDNS_FORWARD_ZONES_RECURSE}  # Forward all other queries to custom DNS servers
+    depends_on:
+      - pdns-mysql-master
+
+  # MariaDB for PowerDNS storage
+  mariadb:
+    image: mariadb:11-ubi
+    networks:
+      pdns-mysql:
+        aliases:
+          - db
+          - mysql
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - mariadb:/var/lib/mysql:Z
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--su=mysql', '--connect', '--innodb_initialized']
+      timeout: 10s
+      retries: 5
+
+  # phpMyAdmin for managing the MariaDB database
+  phpmyadmin:
+    image: phpmyadmin:5
+    networks:
+      - pdns-mysql
+    ports:
+      - '8988:80'
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ['CMD', 'curl', '-fsSL', 'http://127.0.0.1:80']
+      timeout: 10s
+      retries: 5
+
+  # PowerDNS Authoritative Server for redhelix.demo and Reverse DNS
+  pdns-mysql-master:
+    image: pschiffe/pdns-mysql:latest
+    hostname: ns1.redhelix.demo
+    networks:
+      pdns-mysql:
+        ipv4_address: 172.6.0.20
+        aliases:
+          - pdns
+    extra_hosts:
+      - 'ns1.redhelix.demo:172.6.0.20'
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - PDNS_gmysql_password=${PDNS_GMYSQL_PASSWORD}
+      - PDNS_primary=yes
+      - PDNS_api=yes
+      - PDNS_api_key=${PDNS_API_KEY}
+      - PDNS_webserver=yes
+      - PDNS_webserver_address=0.0.0.0
+      - PDNS_webserver_allow_from=0.0.0.0/0
+      - PDNS_version_string=anonymous
+    depends_on:
+      - mariadb
+
+  # Optional: PowerDNS Admin for web management
+  pdns-admin-mysql:
+    image: pschiffe/pdns-admin
+    networks:
+      pdns-mysql:
+        aliases:
+          - pdns-admin
+    ports:
+      - '8989:8080'
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - PDNS_ADMIN_SQLA_DB_PASSWORD=${PDNS_ADMIN_SQLA_DB_PASSWORD}
+      - PDNS_VERSION=4.8
+      - PDNS_API_KEY=${PDNS_API_KEY}
+    depends_on:
+      - mariadb
+      - pdns-mysql-master
+
+networks:
+  pdns-mysql:
+    ipam:
+      config:
+        - subnet: 172.6.0.0/16
+          gateway: 172.6.0.1
+
+volumes:
+  mariadb:
